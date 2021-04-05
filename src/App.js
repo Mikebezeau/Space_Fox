@@ -3,6 +3,7 @@ import { Canvas, useLoader, useFrame } from "react-three-fiber";
 import { RecoilRoot, useRecoilState, useRecoilValue } from "recoil";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
 import { TextureLoader } from "three";
+import * as THREE from "three";
 import {
   shipPositionState,
   enemyPositionState,
@@ -14,7 +15,7 @@ import "./styles.css";
 // Game settings.
 const LASER_RANGE = 100;
 const LASER_Z_VELOCITY = 1;
-const ENEMY_SPEED = 0.1;
+const ENEMY_SPEED = 0.01;
 const GROUND_HEIGHT = -50;
 
 // Just a placeholder sphere to use with React Suspense while waiting for loaders to resolve.
@@ -34,23 +35,39 @@ function Loading() {
   );
 }
 
+//Light source
+function Light({ brightness, color }) {
+  return (
+    <rectAreaLight
+      width={3000}
+      height={3000}
+      color={color}
+      intensity={brightness}
+      position={[-600, 0, 1500]}
+      lookAt={[0, 0, 0]}
+      penumbra={1}
+      castShadow
+    />
+  );
+}
+
 // A Ground plane that moves relative to the player. The player stays at 0,0
 function Terrain() {
   const terrain = useRef();
-
+  const planetR = 1200;
   // Returns a mesh at GROUND_HEIGHT below the player. Scaled to 5000, 5000 with 128 segments.
   // X Rotation is -Math.PI / 2 which is 90 degrees in radians.
   return (
     <mesh
       visible
-      position={[1, GROUND_HEIGHT, -2000]}
+      position={[1, -planetR / 2 - GROUND_HEIGHT, -planetR * 1.5]}
       rotation={[-Math.PI / 2, 0, 0]}
       ref={terrain}
     >
-      <sphereGeometry attach="geometry" args={[1200, 30, 30]} />
+      <sphereGeometry attach="geometry" args={[planetR, 30, 30]} />
       <meshStandardMaterial
         attach="material"
-        color="white"
+        color="purple"
         roughness={1}
         metalness={0}
         wireframe
@@ -68,43 +85,121 @@ function ArWing() {
   const ship = useRef();
   useFrame(({ mouse }) => {
     //send ship forward in current heading
-    const mouseXrnd = Math.round(mouse.x * 100) / 100;
-    const mouseYrnd = Math.round(mouse.y * 100) / 100;
-    console.log(mouseXrnd);
+    const mouseXrnd =
+      Math.abs(Math.round(mouse.x * 10) / 10) > 0.5
+        ? Math.round(mouse.x * 1000) / 1000 - 0.05
+        : 0;
+    const mouseYrnd =
+      Math.abs(Math.round(mouse.y * 1000) / 1000) > 0.05
+        ? Math.round(mouse.y * 1000) / 1000 - 0.05
+        : 0;
+
+    const ANGULAR_SPEED = 0.5;
+    let MOVEMENT = 0;
+    if (mouseYrnd > 0) {
+      //up
+      MOVEMENT = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 1, 0),
+        (ANGULAR_SPEED * Math.PI) / 180
+      );
+    } else if (mouseYrnd < 0) {
+      //down
+      MOVEMENT = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 1, 0),
+        (-ANGULAR_SPEED * Math.PI) / 180
+      );
+    } else if (mouseXrnd > 0) {
+      //right
+      MOVEMENT = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 0, 1),
+        (-ANGULAR_SPEED * Math.PI) / 180
+      );
+    } else if (mouseXrnd < 0) {
+      //left
+      MOVEMENT = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 0, 1),
+        (ANGULAR_SPEED * Math.PI) / 180
+      );
+    }
+
+    ship.current.translateZ(-0.2);
     setShipPosition({
       position: {
-        x: 0, //mouseXrnd * 6,
-        y: 0, //mouseYrnd * 2,
-        //z: (ship.current.position.z -= 0),
+        z: ship.current.position.z,
+        x: ship.current.position.x,
+        y: ship.current.position.y,
       },
       rotation: {
-        z: ship.current.rotation.z - mouseXrnd * 0.1,
-        x: ship.current.rotation.x - mouseXrnd * 0.1,
-        y: ship.current.rotation.y - mouseYrnd * 0.2,
+        z: ship.current.rotation.z,
+        x: ship.current.rotation.x,
+        y: ship.current.rotation.y,
       },
     });
+
+    if (MOVEMENT) {
+      const cur = new THREE.Quaternion().setFromEuler(
+        new THREE.Euler(
+          ship.current.rotation.x,
+          ship.current.rotation.y,
+          ship.current.rotation.z
+        )
+      );
+      cur.multiplyQuaternions(MOVEMENT, cur);
+      const rotation = new THREE.Euler().setFromQuaternion(cur);
+
+      setShipPosition({
+        position: {
+          z: ship.current.position.z,
+          x: ship.current.position.x,
+          y: ship.current.position.y,
+        },
+        rotation: {
+          z: rotation.z,
+          x: rotation.x,
+          y: rotation.y,
+        },
+      });
+    }
   });
   // Update the ships position from the updated state.
-  useFrame(() => {
+  useFrame((state) => {
     ship.current.rotation.z = shipPosition.rotation.z;
     ship.current.rotation.y = shipPosition.rotation.x;
     ship.current.rotation.x = shipPosition.rotation.y;
+    ship.current.position.z = shipPosition.position.z;
     ship.current.position.y = shipPosition.position.y;
     ship.current.position.x = shipPosition.position.x;
+    //followCamera(ship, state.camera);
+
+    try {
+      //Offset from camera to player
+
+      const relativeCameraOffset = new THREE.Vector3(0, 1, 5);
+      //UPDATE PLAYER WORLD MATRIX FOR PERFECT CAMERA FOLLOW
+      //ship.current.updateMatrixWorld();
+      //Apply offset to player matrix
+      var cameraOffset = relativeCameraOffset.applyMatrix4(
+        ship.current.matrixWorld
+      );
+      //SMOOTH CAMERA POSITION TO TARGET POSITION
+      state.camera.position.lerp(cameraOffset, 0.1);
+      state.camera.lookAt(ship.current.position);
+      state.camera.rotation.y = 0.5;
+    } catch (e) {
+      console.log(e);
+    }
   });
 
   const { nodes } = useLoader(GLTFLoader, "models/arwing.glb");
   return (
-    <group ref={ship}>
-      <mesh visible geometry={nodes.Default.geometry}>
-        <meshStandardMaterial
-          attach="material"
-          color="white"
-          roughness={1}
-          metalness={0}
-        />
-      </mesh>
-    </group>
+    <mesh ref={ship} visible geometry={nodes.Default.geometry}>
+      <meshStandardMaterial
+        attach="material"
+        color="gray"
+        roughness={1}
+        metalness={1}
+      />
+    </mesh>
   );
 }
 
@@ -259,11 +354,17 @@ function GameTimer() {
   return null;
 }
 
+/*
+<RecoilRoot>
+  <directionalLight intensity={1} />
+  <ambientLight intensity={0.1} />
+*/
 export default function App() {
   return (
     <>
-      <Canvas style={{ background: "black" }}>
+      <Canvas style={{ background: "black" }} camera={{ position: [0, 0, 60] }}>
         <RecoilRoot>
+          <Light brightness={1} color={"white"} />
           <directionalLight intensity={1} />
           <ambientLight intensity={0.1} />
           <Terrain />
